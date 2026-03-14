@@ -1,0 +1,25 @@
+## .NET gitignore
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+
+## Logs
+logs/
+*.log
+
+## Secrets / environment
+appsettings.Production.json
+.env
+*.pfx
+*.p12
+
+## NuGet
+*.nupkg
+.nuget/
+
+## Build output
+publish/
+artifacts/
