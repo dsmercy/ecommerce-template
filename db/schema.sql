@@ -47,6 +47,9 @@ CREATE TABLE users (
   COLLATE=utf8mb4_unicode_ci
   COMMENT='Registered users — soft delete via deleted_at';
 
+ALTER TABLE users
+    ADD COLUMN refresh_token_hash   VARCHAR(255) NULL AFTER role,
+    ADD COLUMN refresh_token_expiry DATETIME     NULL AFTER refresh_token_hash;
 
 -- =============================================================================
 -- 2. ADDRESSES

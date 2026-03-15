@@ -12,10 +12,27 @@ public record LoginRequest(
     string Password
 );
 
+public record RefreshRequest(
+    string AccessToken,
+    string RefreshToken
+);
+
+public record RevokeRequest(
+    string RefreshToken
+);
+
 public record AuthResponse(
     long UserId,
     string Name,
     string Email,
     string Role,
-    string Token
+    string AccessToken,
+    string RefreshToken,
+    DateTime RefreshTokenExpiry
+);
+
+public record RefreshResponse(
+    string AccessToken,
+    string RefreshToken,
+    DateTime RefreshTokenExpiry
 );

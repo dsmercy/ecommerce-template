@@ -1,4 +1,4 @@
-using Ecommerce.Domain.Entities;
+﻿using Ecommerce.Domain.Entities;
 using Ecommerce.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -21,6 +21,17 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(u => u.Role).HasColumnName("role")
             .HasConversion<string>()
             .HasDefaultValue(UserRole.CUSTOMER);
+
+        // ── Refresh token columns ─────────────────────────────────────────────
+        // refresh_token_hash stores the BCrypt hash of the raw token.
+        // 255 chars covers the BCrypt output length (60 chars) with headroom.
+        builder.Property(u => u.RefreshTokenHash)
+            .HasColumnName("refresh_token_hash")
+            .HasMaxLength(255);
+
+        builder.Property(u => u.RefreshTokenExpiry)
+            .HasColumnName("refresh_token_expiry");
+
         builder.Property(u => u.CreatedAt).HasColumnName("created_at");
         builder.Property(u => u.UpdatedAt).HasColumnName("updated_at");
         builder.Property(u => u.DeletedAt).HasColumnName("deleted_at");

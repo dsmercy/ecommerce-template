@@ -1,4 +1,4 @@
-using Ecommerce.Domain.Enums;
+﻿using Ecommerce.Domain.Enums;
 
 namespace Ecommerce.Domain.Entities;
 
@@ -9,6 +9,12 @@ public class User : AuditableEntity
     public string PasswordHash { get; set; } = string.Empty;
     public string? Phone { get; set; }
     public UserRole Role { get; set; } = UserRole.CUSTOMER;
+
+    // ── Refresh token ─────────────────────────────────────────────────────────
+    // The raw token is never persisted. Only a BCrypt hash is stored so that a
+    // compromised database does not expose valid refresh tokens.
+    public string? RefreshTokenHash { get; set; }
+    public DateTime? RefreshTokenExpiry { get; set; }
 
     // Navigation
     public ICollection<Address> Addresses { get; set; } = new List<Address>();

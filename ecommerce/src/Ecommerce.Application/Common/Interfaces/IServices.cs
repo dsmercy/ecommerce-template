@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Ecommerce.Domain.Entities;
 
 namespace Ecommerce.Application.Common.Interfaces;
@@ -18,23 +19,9 @@ public interface IBlobStorageService
 
 public interface ISearchService
 {
-    /// <summary>
-    /// Configure searchable, filterable, and sortable attributes.
-    /// Waits for the task to complete before returning.
-    /// Must be called before indexing any documents.
-    /// </summary>
     Task EnsureIndexSettingsAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Index all products in a single bulk request.
-    /// Waits for the Meilisearch task to complete so documents are searchable immediately.
-    /// Used by SyncAllProductsAsync.
-    /// </summary>
     Task BulkIndexProductsAsync(IEnumerable<Product> products, CancellationToken ct = default);
-
-    /// <summary>Index or update a single product (fire-and-forget task).</summary>
     Task IndexProductAsync(Product product, CancellationToken ct = default);
-
     Task DeleteProductIndexAsync(long productId, CancellationToken ct = default);
     Task<SearchResult> SearchProductsAsync(string query, ProductSearchFilter filter, CancellationToken ct = default);
 }
@@ -51,7 +38,7 @@ public class ProductSearchDto
     public string Name { get; set; } = string.Empty;
     public string? Brand { get; set; }
     public decimal? BasePrice { get; set; }
-    public long? CategoryId { get; set; }       // required for categoryId filter
+    public long? CategoryId { get; set; }
     public string? CategoryName { get; set; }
     public string? Slug { get; set; }
     public string? PrimaryImageUrl { get; set; }
@@ -69,7 +56,21 @@ public class ProductSearchFilter
 
 public interface ITokenService
 {
-    string GenerateToken(User user);
+    /// <summary>Generates a short-lived signed JWT access token.</summary>
+    string GenerateAccessToken(User user);
+
+    /// <summary>
+    /// Generates a cryptographically random opaque refresh token.
+    /// Returns the RAW value — never store this directly; hash it first.
+    /// </summary>
+    string GenerateRefreshToken();
+
+    /// <summary>
+    /// Validates an expired access token's signature and returns its principal.
+    /// Used during token refresh to confirm the token was legitimately issued
+    /// even though its lifetime has elapsed.
+    /// </summary>
+    System.Security.Claims.ClaimsPrincipal GetPrincipalFromExpiredToken(string accessToken);
 }
 
 public interface ICurrentUserService

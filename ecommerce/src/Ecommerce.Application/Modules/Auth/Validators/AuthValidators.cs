@@ -24,3 +24,20 @@ public class LoginRequestValidator : AbstractValidator<LoginRequest>
         RuleFor(x => x.Password).NotEmpty();
     }
 }
+
+public class RefreshRequestValidator : AbstractValidator<RefreshRequest>
+{
+    public RefreshRequestValidator()
+    {
+        RuleFor(x => x.AccessToken).NotEmpty();
+        RuleFor(x => x.RefreshToken).NotEmpty();
+    }
+}
+
+public class RevokeRequestValidator : AbstractValidator<RevokeRequest>
+{
+    public RevokeRequestValidator()
+    {
+        RuleFor(x => x.RefreshToken).NotEmpty();
+    }
+}
