@@ -1,21 +1,25 @@
-﻿using System.Net;
+﻿using System.Diagnostics;
+using System.Net;
+using System.Security.Claims;
 using System.Text.Json;
 using Ecommerce.Application.Common.Models;
 using FluentValidation;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 
 namespace Ecommerce.API.Middleware;
 
 /// <summary>
-/// Catches all unhandled exceptions and translates them to RFC-7807-style
-/// JSON responses while writing structured log entries at two levels:
+/// Catches all unhandled exceptions, translates them to RFC-7807-style JSON
+/// responses, and writes structured log entries enriched with:
 ///
-///   Warning  — validation errors, 401s, and 404s (business-as-usual failures).
-///   Error    — unexpected exceptions with full stack trace and request context.
+///   • CorrelationId   — from <see cref="CorrelationIdMiddleware"/> (HttpContext.Items)
+///   • TraceId/SpanId  — from <see cref="Activity.Current"/> (W3C distributed trace)
+///   • UserId          — from the JWT NameIdentifier claim, or "anonymous"
+///   • RemoteIp        — caller's IP address
+///   • ExceptionType   — full CLR type name (e.g. "System.InvalidOperationException")
 ///
-/// All entries from this middleware land in both <c>app-*.log</c> and the
-/// dedicated <c>exceptions-*.log</c> sink (filtered by SourceContext in Program.cs).
+/// Log levels:
+///   Warning  — validation errors, 401s, 404s (expected business failures)
+///   Error    — all other unhandled exceptions (alerts warranted)
 /// </summary>
 public class ExceptionHandlingMiddleware
 {
@@ -41,19 +45,18 @@ public class ExceptionHandlingMiddleware
         }
         catch (ValidationException ex)
         {
+            var ctx = BuildErrorContext(context);
             var errors = ex.Errors.Select(e => e.ErrorMessage).ToList();
 
-            // Structured warning — individual validation failures are useful for diagnostics
-            // but are expected traffic, not alerts.
             _logger.LogWarning(
                 ex,
-                "Validation failed | Path={Path} | Method={Method} | " +
-                "RemoteIp={RemoteIp} | ErrorCount={ErrorCount} | Errors={Errors}",
-                context.Request.Path,
-                context.Request.Method,
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-                errors.Count,
-                string.Join("; ", errors));
+                "Validation failed | " +
+                "CorrelationId={CorrelationId} | TraceId={TraceId} | SpanId={SpanId} | " +
+                "Path={Path} | Method={Method} | RemoteIp={RemoteIp} | UserId={UserId} | " +
+                "ErrorCount={ErrorCount} | Errors={Errors}",
+                ctx.CorrelationId, ctx.TraceId, ctx.SpanId,
+                ctx.Path, ctx.Method, ctx.RemoteIp, ctx.UserId,
+                errors.Count, string.Join("; ", errors));
 
             await WriteJsonResponseAsync(
                 context,
@@ -62,14 +65,16 @@ public class ExceptionHandlingMiddleware
         }
         catch (UnauthorizedAccessException ex)
         {
+            var ctx = BuildErrorContext(context);
+
             _logger.LogWarning(
                 ex,
-                "Unauthorized access | Path={Path} | Method={Method} | " +
-                "RemoteIp={RemoteIp} | UserId={UserId} | Message={Message}",
-                context.Request.Path,
-                context.Request.Method,
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-                context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "anonymous",
+                "Unauthorized access | " +
+                "CorrelationId={CorrelationId} | TraceId={TraceId} | SpanId={SpanId} | " +
+                "Path={Path} | Method={Method} | RemoteIp={RemoteIp} | UserId={UserId} | " +
+                "Message={Message}",
+                ctx.CorrelationId, ctx.TraceId, ctx.SpanId,
+                ctx.Path, ctx.Method, ctx.RemoteIp, ctx.UserId,
                 ex.Message);
 
             await WriteJsonResponseAsync(
@@ -79,13 +84,16 @@ public class ExceptionHandlingMiddleware
         }
         catch (KeyNotFoundException ex)
         {
+            var ctx = BuildErrorContext(context);
+
             _logger.LogWarning(
                 ex,
-                "Resource not found | Path={Path} | Method={Method} | " +
-                "RemoteIp={RemoteIp} | Message={Message}",
-                context.Request.Path,
-                context.Request.Method,
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                "Resource not found | " +
+                "CorrelationId={CorrelationId} | TraceId={TraceId} | SpanId={SpanId} | " +
+                "Path={Path} | Method={Method} | RemoteIp={RemoteIp} | UserId={UserId} | " +
+                "Message={Message}",
+                ctx.CorrelationId, ctx.TraceId, ctx.SpanId,
+                ctx.Path, ctx.Method, ctx.RemoteIp, ctx.UserId,
                 ex.Message);
 
             await WriteJsonResponseAsync(
@@ -95,46 +103,85 @@ public class ExceptionHandlingMiddleware
         }
         catch (Exception ex)
         {
-            // ── Full structured error entry ────────────────────────────────────
-            // Every unhandled exception is written with:
-            //   • request coordinates  (method, path, query)
-            //   • caller identity      (userId, remoteIp)
-            //   • exception taxonomy   (type, message)
-            //   • full stack trace     (via {ex} in the template)
-            //
-            // The exception object is passed as the first argument so Serilog
-            // captures it as a structured ExceptionDetail property — not just a
-            // formatted string — enabling downstream log aggregators (e.g. Seq,
-            // Elastic) to index type, message, and frames individually.
+            var ctx = BuildErrorContext(context);
+
+            // Full structured error entry.
+            // Passing the exception as the first argument lets Serilog capture it as a
+            // structured ExceptionDetail — not a flat string — enabling downstream
+            // aggregators (Seq, Elastic, Grafana Loki) to index type/message/frames.
             _logger.LogError(
                 ex,
-                "Unhandled exception | Method={Method} | Path={Path} | " +
-                "Query={Query} | RemoteIp={RemoteIp} | UserId={UserId} | " +
+                "Unhandled exception | " +
+                "CorrelationId={CorrelationId} | TraceId={TraceId} | SpanId={SpanId} | ParentSpanId={ParentSpanId} | " +
+                "Method={Method} | Path={Path} | Query={Query} | " +
+                "RemoteIp={RemoteIp} | UserId={UserId} | " +
                 "ExceptionType={ExceptionType} | ExceptionMessage={ExceptionMessage}",
-                context.Request.Method,
-                context.Request.Path,
-                context.Request.QueryString.HasValue ? context.Request.QueryString.Value : "(none)",
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-                context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "anonymous",
-                ex.GetType().FullName,
-                ex.Message);
+                ctx.CorrelationId, ctx.TraceId, ctx.SpanId, ctx.ParentSpanId,
+                ctx.Method, ctx.Path, ctx.Query,
+                ctx.RemoteIp, ctx.UserId,
+                ex.GetType().FullName, ex.Message);
 
-            var correlationId = context.Response.Headers["X-Correlation-Id"].ToString();
             await WriteJsonResponseAsync(
                 context,
                 (int)HttpStatusCode.InternalServerError,
                 ApiResponse<object>.Fail(
-                    $"An unexpected error occurred. Reference ID: {correlationId}"));
+                    $"An unexpected error occurred. Reference ID: {ctx.CorrelationId}"));
         }
     }
 
-    // ── Helper ─────────────────────────────────────────────────────────────────
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private static ErrorContext BuildErrorContext(HttpContext context)
+    {
+        var activity = Activity.Current;
+
+        return new ErrorContext
+        {
+            CorrelationId = context.Items.TryGetValue("CorrelationId", out var cid) && cid is string s
+                ? s
+                : context.Response.Headers["X-Correlation-Id"].FirstOrDefault() ?? "(none)",
+
+            TraceId = activity?.TraceId.ToString() ?? "(none)",
+            SpanId = activity?.SpanId.ToString() ?? "(none)",
+            ParentSpanId = activity?.ParentSpanId.ToString() ?? "(none)",
+
+            Path = context.Request.Path,
+            Method = context.Request.Method,
+            Query = context.Request.QueryString.HasValue
+                          ? context.Request.QueryString.Value
+                          : "(none)",
+
+            RemoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+
+            UserId = context.User?.FindFirstValue(ClaimTypes.NameIdentifier)
+                  ?? context.User?.FindFirstValue("sub")
+                  ?? "anonymous"
+        };
+    }
 
     private static async Task WriteJsonResponseAsync<T>(
         HttpContext context, int statusCode, ApiResponse<T> body)
     {
-        context.Response.StatusCode = statusCode;
-        context.Response.ContentType = "application/json";
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = statusCode;
+            context.Response.ContentType = "application/json";
+        }
         await context.Response.WriteAsync(JsonSerializer.Serialize(body, _jsonOptions));
+    }
+
+    // ── Private record ───────────────────────────────────────────────────────
+
+    private sealed record ErrorContext
+    {
+        public string CorrelationId { get; init; } = string.Empty;
+        public string TraceId { get; init; } = string.Empty;
+        public string SpanId { get; init; } = string.Empty;
+        public string ParentSpanId { get; init; } = string.Empty;
+        public string Path { get; init; } = string.Empty;
+        public string Method { get; init; } = string.Empty;
+        public string Query { get; init; } = string.Empty;
+        public string RemoteIp { get; init; } = string.Empty;
+        public string UserId { get; init; } = string.Empty;
     }
 }
