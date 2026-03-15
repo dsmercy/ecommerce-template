@@ -3,41 +3,15 @@ using Ecommerce.API.Middleware;
 using Ecommerce.Application;
 using Ecommerce.Infrastructure;
 using Serilog;
-using Serilog.Events;
-
-// ── Bootstrap Serilog ──────────────────────────────────────────────────────────
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
-    .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
-    .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
-    .Enrich.FromLogContext()
-    .Enrich.WithEnvironmentName()
-    .Enrich.WithThreadId()
-    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
-    .WriteTo.Logger(lc => lc
-        .Filter.ByIncludingOnly(e => e.Level >= LogEventLevel.Information)
-        .WriteTo.File(
-            path: "logs/app-.log",
-            rollingInterval: RollingInterval.Day,
-            retainedFileCountLimit: 30,
-            outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"))
-    .WriteTo.Logger(lc => lc
-        .Filter.ByIncludingOnly(e => e.Level >= LogEventLevel.Error)
-        .WriteTo.File(
-            path: "logs/errors-.log",
-            rollingInterval: RollingInterval.Day,
-            retainedFileCountLimit: 60,
-            outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"))
-    .CreateLogger();
 
 try
 {
-    Log.Information("Starting Ecommerce API");
-
     var builder = WebApplication.CreateBuilder(args);
 
-    // ── Use Serilog ────────────────────────────────────────────────────────────
-    builder.Host.UseSerilog();
+    // ── Configure Serilog from appsettings ─────────────────────────────────────
+    builder.Host.ConfigureSerilog(builder.Configuration);
+
+    Log.Information("Starting Ecommerce API");
 
     // ── Services ───────────────────────────────────────────────────────────────
     builder.Services
