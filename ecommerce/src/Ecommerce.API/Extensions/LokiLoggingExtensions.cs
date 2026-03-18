@@ -1,33 +1,15 @@
 ﻿using Ecommerce.API.Logging;
 using Serilog;
 using Serilog.Events;
+using Serilog.Sinks.Grafana.Loki;
 
 namespace Ecommerce.API.Extensions;
 
-public static class LoggingExtensions
+public static class LokiLoggingExtensions
 {
-    /// <summary>
-    /// Configures Serilog with three file sinks and two structural enrichers:
-    ///
-    ///   Sinks
-    ///   ─────
-    ///   trace-*.log   — Verbose/Debug only.  Full request detail, bodies, headers.
-    ///   app-*.log     — Information/Warning.  One-line request summaries, business events.
-    ///   errors-*.log  — Error/Fatal only.     Exceptions with full stack trace + context.
-    ///
-    ///   Global enrichers
-    ///   ────────────────
-    ///   ActivityEnricher        — injects W3C TraceId / SpanId / ParentSpanId from
-    ///                             Activity.Current into every log entry.
-    ///   RequestContextEnricher  — registered via DI (IHttpContextAccessor) so it can
-    ///                             read the per-request UserId and CorrelationId that
-    ///                             CorrelationIdMiddleware has already resolved.
-    ///
-    /// The DI-based enricher (RequestContextEnricher) is wired in Program.cs via
-    ///   .UseSerilog((ctx, services, cfg) => cfg.ReadFrom.Services(services)...)
-    /// which means this method only needs to register the static enrichers.
-    /// </summary>
-    public static IHostBuilder ConfigureSerilog(this IHostBuilder builder, IConfiguration configuration)
+    public static IHostBuilder ConfigureSerilogWithLoki(
+        this IHostBuilder builder,
+        IConfiguration configuration)
     {
         var traceConfig = configuration.GetSection("Logging:Trace").Get<FileLogConfig>()
             ?? new FileLogConfig { Path = "logs/trace-.log" };
@@ -36,8 +18,20 @@ public static class LoggingExtensions
         var errorConfig = configuration.GetSection("Logging:Error").Get<FileLogConfig>()
             ?? new FileLogConfig { Path = "logs/errors-.log" };
 
+        // ── READ THE FLAG ──────────────────────────────────────────────────────
+        // Supports both environment variable and appsettings key.
+        // Environment variable (docker-compose / launchSettings) takes precedence.
+        var useLoki = string.Equals(
+            configuration["UseLokiLogs"], "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        var lokiUrl = configuration["Loki:Url"] ?? "http://localhost:3100";
+        var appLabel = configuration["Loki:AppName"] ?? "ecommerce-api";
+
         return builder.UseSerilog((ctx, services, logConfig) =>
         {
+            var env = ctx.HostingEnvironment.EnvironmentName.ToLowerInvariant();
+
             logConfig
                 .MinimumLevel.Verbose()
                 .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
@@ -46,17 +40,16 @@ public static class LoggingExtensions
                 .MinimumLevel.Override("Microsoft.AspNetCore.Routing", LogEventLevel.Warning)
                 .MinimumLevel.Override("Microsoft.AspNetCore.StaticFiles", LogEventLevel.Warning)
 
-                // ── Static enrichers (no DI required) ─────────────────────
-                .Enrich.FromLogContext()          // CorrelationId pushed by CorrelationIdMiddleware
+                .Enrich.FromLogContext()
                 .Enrich.WithEnvironmentName()
                 .Enrich.WithThreadId()
-                .Enrich.With<ActivityEnricher>()  // W3C TraceId / SpanId
+                .Enrich.With<ActivityEnricher>()
+                .Enrich.WithProperty("app", appLabel)
+                .Enrich.WithProperty("env", env)
 
-                // ── DI-based enrichers (IHttpContextAccessor → UserId, etc.) ─
-                // Serilog.Extensions.Hosting resolves these from the DI container.
                 .ReadFrom.Services(services)
 
-                // ── Trace sink: Verbose/Debug only ─────────────────────────
+                // ── Trace sink ─────────────────────────────────────────────────
                 .WriteTo.Logger(lc => lc
                     .Filter.ByIncludingOnly(e => e.Level <= LogEventLevel.Debug)
                     .WriteTo.File(
@@ -65,7 +58,7 @@ public static class LoggingExtensions
                         retainedFileCountLimit: traceConfig.RetainedFileCountLimit,
                         outputTemplate: traceConfig.OutputTemplate))
 
-                // ── App sink: Information / Warning ────────────────────────
+                // ── App sink ───────────────────────────────────────────────────
                 .WriteTo.Logger(lc => lc
                     .Filter.ByIncludingOnly(e =>
                         e.Level >= LogEventLevel.Information &&
@@ -76,7 +69,7 @@ public static class LoggingExtensions
                         retainedFileCountLimit: appConfig.RetainedFileCountLimit,
                         outputTemplate: appConfig.OutputTemplate))
 
-                // ── Error sink: Error/Fatal only ───────────────────────────
+                // ── Error sink ─────────────────────────────────────────────────
                 .WriteTo.Logger(lc => lc
                     .Filter.ByIncludingOnly(e => e.Level >= LogEventLevel.Error)
                     .WriteTo.File(
@@ -85,12 +78,33 @@ public static class LoggingExtensions
                         retainedFileCountLimit: errorConfig.RetainedFileCountLimit,
                         outputTemplate: errorConfig.OutputTemplate))
 
-                // ── Console (dev only) ─────────────────────────────────────
+                // ── Loki sink: CONDITIONAL on UseLokiLogs=true ─────────────────
+                .WriteTo.Conditional(
+                    _ => useLoki,
+                    wt => wt.GrafanaLoki(
+                        uri: lokiUrl,
+                        labels: new[]
+                        {
+                            new LokiLabel { Key = "app", Value = appLabel },
+                            new LokiLabel { Key = "env", Value = env }
+                        },
+                        propertiesAsLabels: new[] { "level" },
+                        restrictedToMinimumLevel: LogEventLevel.Information,
+                        batchPostingLimit: 1000,
+                        period: TimeSpan.FromSeconds(2)))
+
+                // ── Console (dev only) ─────────────────────────────────────────
                 .WriteTo.Conditional(
                     _ => ctx.HostingEnvironment.IsDevelopment(),
                     wt => wt.Console(
                         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {Message:lj}{NewLine}{Exception}",
                         restrictedToMinimumLevel: LogEventLevel.Information));
+
+            // Startup confirmation — visible immediately in the bootstrap console
+            if (useLoki)
+                Log.Information("Logging mode: files + Loki @ {LokiUrl}", lokiUrl);
+            else
+                Log.Information("Logging mode: files only (UseLokiLogs=false)");
         });
     }
 }

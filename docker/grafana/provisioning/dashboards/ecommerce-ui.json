@@ -1,0 +1,231 @@
+{
+  "uid": "ecommerce-logs",
+  "title": "Ecommerce Logs",
+  "tags": ["ecommerce", "loki"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "app",
+        "type": "custom",
+        "label": "Application",
+        "current": { "text": "All", "value": "" },
+        "options": [
+          { "text": "All",           "value": "",                "selected": true },
+          { "text": "API only",      "value": "ecommerce-api",   "selected": false },
+          { "text": "Frontend only", "value": "ecommerce-ui",    "selected": false }
+        ],
+        "hide": 0
+      },
+      {
+        "name": "level",
+        "type": "custom",
+        "label": "Level",
+        "current": { "text": "All", "value": "" },
+        "options": [
+          { "text": "All",     "value": "",        "selected": true },
+          { "text": "error",   "value": "error",   "selected": false },
+          { "text": "warning", "value": "warning", "selected": false },
+          { "text": "info",    "value": "info",    "selected": false },
+          { "text": "debug",   "value": "debug",   "selected": false }
+        ],
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+
+    {
+      "id": 1,
+      "title": "Log volume — API vs Frontend",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "sum by (app) (count_over_time({app=~\"ecommerce-api|ecommerce-ui\"}[1m]))",
+          "legendFormat": "{{app}}"
+        }
+      ]
+    },
+
+    {
+      "id": 2,
+      "title": "Error rate — API vs Frontend",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 7 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "sum by (app) (count_over_time({app=~\"ecommerce-api|ecommerce-ui\", level=\"error\"}[1m]))",
+          "legendFormat": "{{app}} errors"
+        }
+      ]
+    },
+
+    {
+      "id": 3,
+      "title": "API — all logs",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 14 },
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=\"ecommerce-api\"}",
+          "legendFormat": ""
+        }
+      ]
+    },
+
+    {
+      "id": 4,
+      "title": "Frontend — all logs",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 14 },
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=\"ecommerce-ui\"}",
+          "legendFormat": ""
+        }
+      ]
+    },
+
+    {
+      "id": 5,
+      "title": "API — errors only",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 24 },
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=\"ecommerce-api\", level=\"error\"}",
+          "legendFormat": ""
+        }
+      ]
+    },
+
+    {
+      "id": 6,
+      "title": "Frontend — errors only",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 24 },
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=\"ecommerce-ui\", level=\"error\"}",
+          "legendFormat": ""
+        }
+      ]
+    },
+
+    {
+      "id": 7,
+      "title": "API — request log (INFO/WARN)",
+      "description": "One-line request summaries from RequestLoggingMiddleware",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
+      "options": {
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=\"ecommerce-api\"} |= \"←\"",
+          "legendFormat": ""
+        }
+      ]
+    },
+
+    {
+      "id": 8,
+      "title": "Web Vitals (Frontend)",
+      "description": "CLS, INP, LCP, FCP, TTFB from real user sessions",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 44 },
+      "options": {
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=\"ecommerce-ui\"} |= \"web-vital\"",
+          "legendFormat": ""
+        }
+      ]
+    },
+
+    {
+      "id": 9,
+      "title": "All logs — combined stream",
+      "description": "Frontend + API side by side, correlated by timestamp",
+      "type": "logs",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 52 },
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki" },
+          "expr": "{app=~\"ecommerce-api|ecommerce-ui\"}",
+          "legendFormat": ""
+        }
+      ]
+    }
+
+  ]
+}

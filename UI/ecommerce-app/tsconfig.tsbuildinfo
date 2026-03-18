@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/wdyr.ts","./src/lib/logger.ts","./src/lib/sentry.ts","./src/lib/utils.ts","./src/lib/vitals.ts","./src/test/phase1.test.ts","./src/test/setup.ts"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/main.tsx","./src/wdyr.ts","./src/lib/logger.ts","./src/lib/utils.ts","./src/lib/vitals.ts","./src/test/phase1.test.ts","./src/test/setup.ts"],"version":"5.9.3"}

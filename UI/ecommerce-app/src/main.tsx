@@ -1,18 +1,14 @@
-// wdyr MUST be the very first import in dev — it patches React before any component loads
+// wdyr MUST be the very first import in dev — patches React before any component loads
 if (import.meta.env.DEV) await import('./wdyr');
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { initSentry } from '@lib/sentry';
 import { reportWebVitals } from '@lib/vitals';
 import { logger } from '@lib/logger';
 import './index.css';
 
-// Sentry must initialise before rendering so all errors are captured
-initSentry();
-
-// Global error listeners — catch errors that escape React's error boundaries
+// Global error listeners — catch errors that escape React error boundaries
 window.addEventListener('error', (event) => {
   logger.error('Uncaught global error', {
     message: event.message,

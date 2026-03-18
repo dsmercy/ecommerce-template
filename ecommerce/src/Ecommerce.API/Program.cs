@@ -40,7 +40,10 @@ try
     Activity.ForceDefaultIdFormat = true;
 
     // ── Serilog ───────────────────────────────────────────────────────────────
-    builder.Host.ConfigureSerilog(builder.Configuration);
+    builder.Host.ConfigureSerilogWithLoki(builder.Configuration);
+
+    Log.Information("UseLokiLogs flag value: {Value}",
+    builder.Configuration["UseLokiLogs"]);
 
     Log.Information("Starting Ecommerce API");
 
