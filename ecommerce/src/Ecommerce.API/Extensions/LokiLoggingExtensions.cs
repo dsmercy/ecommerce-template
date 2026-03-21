@@ -20,10 +20,7 @@ public static class LokiLoggingExtensions
             var errorConfig = configuration.GetSection("Logging:Error").Get<FileLogConfig>()
                 ?? new FileLogConfig { Path = "logs/errors-.log" };
 
-            var useLoki = string.Equals(
-                configuration["UseLokiLogs"], "true",
-                StringComparison.OrdinalIgnoreCase);
-
+            var useLoki = string.Equals(configuration["UseLokiLogs"], "true", StringComparison.OrdinalIgnoreCase);
             var lokiUrl = configuration["Loki:Url"] ?? "http://localhost:3100";
             var appLabel = configuration["Loki:AppName"] ?? "ecommerce-api";
             var env = ctx.HostingEnvironment.EnvironmentName.ToLowerInvariant();
@@ -40,83 +37,94 @@ public static class LokiLoggingExtensions
                 .Enrich.WithEnvironmentName()
                 .Enrich.WithThreadId()
                 .Enrich.With<ActivityEnricher>()
-                .Enrich.WithProperty("app", appLabel)
+                .Enrich.WithProperty("app", appLabel)   // default — LogsController overrides per frontend event
                 .Enrich.WithProperty("env", env)
 
-                .ReadFrom.Services(services)
+                .ReadFrom.Services(services);
 
-                // ── Trace sink ─────────────────────────────────────────────────
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(e => e.Level <= LogEventLevel.Debug)
-                    .WriteTo.File(
-                        path: traceConfig.Path,
-                        rollingInterval: RollingInterval.Day,
-                        retainedFileCountLimit: traceConfig.RetainedFileCountLimit,
-                        outputTemplate: traceConfig.OutputTemplate))
-
-                // ── App sink ───────────────────────────────────────────────────
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(e =>
-                        e.Level >= LogEventLevel.Information &&
-                        e.Level < LogEventLevel.Error)
-                    .WriteTo.File(
-                        path: appConfig.Path,
-                        rollingInterval: RollingInterval.Day,
-                        retainedFileCountLimit: appConfig.RetainedFileCountLimit,
-                        outputTemplate: appConfig.OutputTemplate))
-
-                // ── Error sink ─────────────────────────────────────────────────
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(e => e.Level >= LogEventLevel.Error)
-                    .WriteTo.File(
-                        path: errorConfig.Path,
-                        rollingInterval: RollingInterval.Day,
-                        retainedFileCountLimit: errorConfig.RetainedFileCountLimit,
-                        outputTemplate: errorConfig.OutputTemplate))
-
-                // ── Loki sink: only when UseLokiLogs=true ──────────────────────
-                .WriteTo.Conditional(
-                    _ => useLoki,
-                    wt => wt.GrafanaLoki(
-                        uri: lokiUrl,
-                        labels: new[]
-                        {
-                            new LokiLabel { Key = "app", Value = appLabel },
-                            new LokiLabel { Key = "env", Value = env }
-                        },
-                        propertiesAsLabels: new[] { "level" },
-                        restrictedToMinimumLevel: LogEventLevel.Information,
-                        batchPostingLimit: 1000,
-                        period: TimeSpan.FromSeconds(2)))
-
-                // ── Console (dev only) ─────────────────────────────────────────
-                .WriteTo.Conditional(
-                    _ => ctx.HostingEnvironment.IsDevelopment(),
-                    wt => wt.Console(
-                        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {Message:lj}{NewLine}{Exception}",
-                        restrictedToMinimumLevel: LogEventLevel.Information));
-
-            // ── Startup confirmation — clearly visible in the console ───────────
             if (useLoki)
             {
-                // Verify Loki is actually reachable before the app starts serving traffic
-                VerifyLokiConnectivity(lokiUrl);
-                Log.Information("Logging mode: files + Loki @ {LokiUrl} | app={AppLabel} env={Env}",
+                // ── LOKI MODE ──────────────────────────────────────────────────
+                // Loki is the only destination. No file sinks.
+                // If Loki is unreachable at startup we throw — fail fast so the
+                // developer knows immediately rather than silently losing logs.
+                EnsureLokiReachable(lokiUrl);   // throws if down
+
+                logConfig
+                    .WriteTo.GrafanaLoki(
+                        uri: lokiUrl,
+                        propertiesAsLabels: new[] { "app", "env", "level" },
+                        restrictedToMinimumLevel: LogEventLevel.Information,
+                        batchPostingLimit: 1000,
+                        period: TimeSpan.FromSeconds(2))
+
+                    // Console kept in dev so you still see output locally
+                    .WriteTo.Conditional(
+                        _ => ctx.HostingEnvironment.IsDevelopment(),
+                        wt => wt.Console(
+                            outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] [{app}] {Message:lj}{NewLine}{Exception}",
+                            restrictedToMinimumLevel: LogEventLevel.Information));
+
+                Log.Information("Logging mode: Loki only @ {LokiUrl} | app={AppLabel} env={Env}",
                     lokiUrl, appLabel, env);
             }
             else
             {
-                Log.Information("Logging mode: files only (UseLokiLogs=false)");
+                // ── FILE MODE ──────────────────────────────────────────────────
+                // UseLokiLogs=false — write everything to files.
+                // Both API and UI logs land here (UI via LogsController → Serilog).
+                logConfig
+                    // Trace sink: Verbose/Debug
+                    .WriteTo.Logger(lc => lc
+                        .Filter.ByIncludingOnly(e => e.Level <= LogEventLevel.Debug)
+                        .WriteTo.File(
+                            path: traceConfig.Path,
+                            rollingInterval: RollingInterval.Day,
+                            retainedFileCountLimit: traceConfig.RetainedFileCountLimit,
+                            outputTemplate: traceConfig.OutputTemplate))
+
+                    // App sink: Information/Warning
+                    .WriteTo.Logger(lc => lc
+                        .Filter.ByIncludingOnly(e =>
+                            e.Level >= LogEventLevel.Information &&
+                            e.Level < LogEventLevel.Error)
+                        .WriteTo.File(
+                            path: appConfig.Path,
+                            rollingInterval: RollingInterval.Day,
+                            retainedFileCountLimit: appConfig.RetainedFileCountLimit,
+                            outputTemplate: appConfig.OutputTemplate))
+
+                    // Error sink: Error/Fatal
+                    .WriteTo.Logger(lc => lc
+                        .Filter.ByIncludingOnly(e => e.Level >= LogEventLevel.Error)
+                        .WriteTo.File(
+                            path: errorConfig.Path,
+                            rollingInterval: RollingInterval.Day,
+                            retainedFileCountLimit: errorConfig.RetainedFileCountLimit,
+                            outputTemplate: errorConfig.OutputTemplate))
+
+                    .WriteTo.Conditional(
+                        _ => ctx.HostingEnvironment.IsDevelopment(),
+                        wt => wt.Console(
+                            outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] [{app}] {Message:lj}{NewLine}{Exception}",
+                            restrictedToMinimumLevel: LogEventLevel.Information));
+
+                Log.Information("Logging mode: files only (UseLokiLogs=false) — trace={Trace} app={App} errors={Errors}",
+                    traceConfig.Path, appConfig.Path, errorConfig.Path);
             }
         });
     }
 
     /// <summary>
-    /// Synchronously checks Loki's /ready endpoint at startup.
-    /// Logs a clear WARNING if unreachable so the developer knows immediately
-    /// why Grafana is empty — instead of silently dropping logs.
+    /// Verifies Loki is reachable before the app starts.
+    /// Throws <see cref="InvalidOperationException"/> if the /ready endpoint
+    /// does not return 2xx within 3 seconds.
+    ///
+    /// This is intentional fail-fast behaviour: when UseLokiLogs=true,
+    /// Loki is the ONLY log destination. A silent failure would mean the
+    /// entire application runs with no logging at all — worse than crashing.
     /// </summary>
-    private static void VerifyLokiConnectivity(string lokiUrl)
+    private static void EnsureLokiReachable(string lokiUrl)
     {
         try
         {
@@ -124,19 +132,25 @@ public static class LokiLoggingExtensions
             var response = http.GetAsync($"{lokiUrl}/ready").GetAwaiter().GetResult();
 
             if (response.IsSuccessStatusCode)
+            {
                 Log.Information("Loki connectivity check: OK ({LokiUrl}/ready)", lokiUrl);
-            else
-                Log.Warning("Loki connectivity check: responded with {Status} — logs may not appear in Grafana",
-                    response.StatusCode);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Loki is not ready. {lokiUrl}/ready returned HTTP {(int)response.StatusCode}. " +
+                $"Fix Loki or set UseLokiLogs=false to fall back to file logging.");
+        }
+        catch (InvalidOperationException)
+        {
+            throw;  // re-throw our own descriptive exception as-is
         }
         catch (Exception ex)
         {
-            Log.Warning(
-                "Loki connectivity check FAILED: cannot reach {LokiUrl}/ready — {Error}\n" +
-                "  If running locally: ensure 'docker compose up -d loki' is running\n" +
-                "  If running in Docker: use 'http://loki:3100' not 'http://localhost:3100'\n" +
-                "  Logs will go to files only until Loki is reachable.",
-                lokiUrl, ex.Message);
+            throw new InvalidOperationException(
+                $"Loki is unreachable at {lokiUrl}/ready — {ex.Message}. " +
+                $"Ensure 'docker compose up -d loki' is running, " +
+                $"or set UseLokiLogs=false to fall back to file logging.", ex);
         }
     }
 }
