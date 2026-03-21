@@ -11,25 +11,21 @@ public static class LokiLoggingExtensions
         this IHostBuilder builder,
         IConfiguration configuration)
     {
-        var traceConfig = configuration.GetSection("Logging:Trace").Get<FileLogConfig>()
-            ?? new FileLogConfig { Path = "logs/trace-.log" };
-        var appConfig = configuration.GetSection("Logging:App").Get<FileLogConfig>()
-            ?? new FileLogConfig { Path = "logs/app-.log" };
-        var errorConfig = configuration.GetSection("Logging:Error").Get<FileLogConfig>()
-            ?? new FileLogConfig { Path = "logs/errors-.log" };
-
-        // ── READ THE FLAG ──────────────────────────────────────────────────────
-        // Supports both environment variable and appsettings key.
-        // Environment variable (docker-compose / launchSettings) takes precedence.
-        var useLoki = string.Equals(
-            configuration["UseLokiLogs"], "true",
-            StringComparison.OrdinalIgnoreCase);
-
-        var lokiUrl = configuration["Loki:Url"] ?? "http://localhost:3100";
-        var appLabel = configuration["Loki:AppName"] ?? "ecommerce-api";
-
         return builder.UseSerilog((ctx, services, logConfig) =>
         {
+            var traceConfig = configuration.GetSection("Logging:Trace").Get<FileLogConfig>()
+                ?? new FileLogConfig { Path = "logs/trace-.log" };
+            var appConfig = configuration.GetSection("Logging:App").Get<FileLogConfig>()
+                ?? new FileLogConfig { Path = "logs/app-.log" };
+            var errorConfig = configuration.GetSection("Logging:Error").Get<FileLogConfig>()
+                ?? new FileLogConfig { Path = "logs/errors-.log" };
+
+            var useLoki = string.Equals(
+                configuration["UseLokiLogs"], "true",
+                StringComparison.OrdinalIgnoreCase);
+
+            var lokiUrl = configuration["Loki:Url"] ?? "http://localhost:3100";
+            var appLabel = configuration["Loki:AppName"] ?? "ecommerce-api";
             var env = ctx.HostingEnvironment.EnvironmentName.ToLowerInvariant();
 
             logConfig
@@ -78,7 +74,7 @@ public static class LokiLoggingExtensions
                         retainedFileCountLimit: errorConfig.RetainedFileCountLimit,
                         outputTemplate: errorConfig.OutputTemplate))
 
-                // ── Loki sink: CONDITIONAL on UseLokiLogs=true ─────────────────
+                // ── Loki sink: only when UseLokiLogs=true ──────────────────────
                 .WriteTo.Conditional(
                     _ => useLoki,
                     wt => wt.GrafanaLoki(
@@ -100,11 +96,47 @@ public static class LokiLoggingExtensions
                         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {Message:lj}{NewLine}{Exception}",
                         restrictedToMinimumLevel: LogEventLevel.Information));
 
-            // Startup confirmation — visible immediately in the bootstrap console
+            // ── Startup confirmation — clearly visible in the console ───────────
             if (useLoki)
-                Log.Information("Logging mode: files + Loki @ {LokiUrl}", lokiUrl);
+            {
+                // Verify Loki is actually reachable before the app starts serving traffic
+                VerifyLokiConnectivity(lokiUrl);
+                Log.Information("Logging mode: files + Loki @ {LokiUrl} | app={AppLabel} env={Env}",
+                    lokiUrl, appLabel, env);
+            }
             else
+            {
                 Log.Information("Logging mode: files only (UseLokiLogs=false)");
+            }
         });
+    }
+
+    /// <summary>
+    /// Synchronously checks Loki's /ready endpoint at startup.
+    /// Logs a clear WARNING if unreachable so the developer knows immediately
+    /// why Grafana is empty — instead of silently dropping logs.
+    /// </summary>
+    private static void VerifyLokiConnectivity(string lokiUrl)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            var response = http.GetAsync($"{lokiUrl}/ready").GetAwaiter().GetResult();
+
+            if (response.IsSuccessStatusCode)
+                Log.Information("Loki connectivity check: OK ({LokiUrl}/ready)", lokiUrl);
+            else
+                Log.Warning("Loki connectivity check: responded with {Status} — logs may not appear in Grafana",
+                    response.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(
+                "Loki connectivity check FAILED: cannot reach {LokiUrl}/ready — {Error}\n" +
+                "  If running locally: ensure 'docker compose up -d loki' is running\n" +
+                "  If running in Docker: use 'http://loki:3100' not 'http://localhost:3100'\n" +
+                "  Logs will go to files only until Loki is reachable.",
+                lokiUrl, ex.Message);
+        }
     }
 }

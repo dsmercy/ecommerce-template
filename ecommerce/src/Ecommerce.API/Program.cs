@@ -105,7 +105,11 @@ try
         });
     }
 
-    app.UseHttpsRedirection();
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseHttpsRedirection();   // only redirect in staging/prod
+    }
+
     app.UseCors("AllowAll");
     app.UseAuthentication();
     app.UseAuthorization();
