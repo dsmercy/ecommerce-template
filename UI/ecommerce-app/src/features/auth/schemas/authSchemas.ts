@@ -1,0 +1,32 @@
+import { z } from 'zod';
+
+// ─── Register ─────────────────────────────────────────────────────────────────
+
+export const registerSchema = z.object({
+  name: z
+    .string()
+    .min(1, 'Name is required')
+    .max(150, 'Name must be 150 characters or fewer'),
+  email: z.string().email('Enter a valid email address'),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Must contain at least one uppercase letter')
+    .regex(/[0-9]/, 'Must contain at least one digit'),
+  phone: z
+    .string()
+    .max(20, 'Phone must be 20 characters or fewer')
+    .optional()
+    .or(z.literal('')),
+});
+
+export type RegisterFormData = z.infer<typeof registerSchema>;
+
+// ─── Login ────────────────────────────────────────────────────────────────────
+
+export const loginSchema = z.object({
+  email: z.string().email('Enter a valid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+export type LoginFormData = z.infer<typeof loginSchema>;

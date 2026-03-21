@@ -135,3 +135,5 @@ docker-volumes/
 *.pid
 *.seed
 *.pid.lock
+
+package-lock.json
